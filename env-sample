@@ -9,3 +9,9 @@ SMTP_USERNAME=smtpusername
 SMTP_PASSWORD=smtppassword
 SMTP_FROM=noreply@example.com
 EMAIL_ENABLED=true
+# Web server (never enable FLASK_DEBUG in production - the Werkzeug
+# debugger allows remote code execution, and the reloader would also
+# start the scheduler twice, running every job twice)
+FLASK_DEBUG=false
+HOST=0.0.0.0
+PORT=5000

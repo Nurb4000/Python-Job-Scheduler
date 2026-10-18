@@ -1,4 +1,5 @@
 import os
+import threading
 from datetime import datetime
 
 from flask import Blueprint, render_template, redirect, url_for, flash, request, current_app, send_file
@@ -187,10 +188,11 @@ def schedule_edit(id):
 @admin_required
 def schedule_delete(id):
     schedule = Schedule.query.get_or_404(id)
+    job_number = schedule.job_number
     db.session.delete(schedule)
     db.session.commit()
     refresh_scheduler(current_app._get_current_object())
-    flash(f'Schedule {schedule.job_number} deleted.', 'success')
+    flash(f'Schedule {job_number} deleted.', 'success')
     return redirect(url_for('admin.schedules'))
 
 
@@ -199,9 +201,13 @@ def schedule_delete(id):
 @admin_required
 def schedule_run_now(id):
     schedule = Schedule.query.get_or_404(id)
+    job_number = schedule.job_number
     from scheduler_service import run_schedule
-    run_schedule(schedule.id, app=current_app._get_current_object())
-    flash(f'Schedule {schedule.job_number} triggered.', 'info')
+    app = current_app._get_current_object()
+    threading.Thread(
+        target=run_schedule, args=(schedule.id, app), daemon=True
+    ).start()
+    flash(f'Schedule {job_number} triggered. Refresh to see results in history.', 'info')
     return redirect(url_for('admin.schedules'))
 
 
@@ -306,7 +312,8 @@ def user_delete(id):
     if user.id == current_user.id:
         flash('Cannot delete yourself.', 'danger')
         return redirect(url_for('admin.users'))
+    username = user.username
     db.session.delete(user)
     db.session.commit()
-    flash(f'User {user.username} deleted.', 'success')
+    flash(f'User {username} deleted.', 'success')
     return redirect(url_for('admin.users'))

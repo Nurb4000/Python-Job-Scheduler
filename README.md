@@ -5,6 +5,14 @@ Simple job scheduling system for python scripts. Nothing real fancy, just enough
 - On errors, it will email the owners. 
 - Be sure to edit the .env file for your smtp server settings and choose a better default admin password.
 - Use SQLite for the back-end DB.
+
+Running
+
+- `python app.py` — web UI only.
+- `python app.py scheduler` — web UI **plus** the background scheduler. Run this on exactly one host, or every job will fire twice.
+- Copy `env-sample` to `.env` and set your values. Leave `FLASK_DEBUG` unset or `false` outside local development.
+- The server binds to `HOST`/`PORT` from `.env` (default `0.0.0.0:5000`). Put it behind a reverse proxy with HTTPS for anything beyond a trusted LAN.
+
 - Schedule Options
     - One time
     - Hourly

@@ -10,9 +10,10 @@ def create_app():
     app = Flask(__name__)
     app.config.from_object('config.Config')
 
-    from extensions import db, login_manager
+    from extensions import db, login_manager, csrf
     db.init_app(app)
     login_manager.init_app(app)
+    csrf.init_app(app)
 
     from models import User
     @login_manager.user_loader
@@ -51,9 +52,18 @@ def _ensure_admin(app):
 
 if __name__ == '__main__':
     app = create_app()
-    scheduler = None
-    if 'scheduler' in sys.argv:
+    debug = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
+    # With the Werkzeug reloader, __main__ executes in both the parent and the
+    # child process. Only start the scheduler in the child (or always, when the
+    # reloader is off) so jobs don't get registered and fired twice.
+    if 'scheduler' in sys.argv and (
+        not debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true'
+    ):
         from scheduler_service import start_scheduler
         scheduler = start_scheduler(app)
         print(f'Scheduler started with {len(scheduler.get_jobs())} jobs')
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(
+        host=os.getenv('HOST', '0.0.0.0'),
+        port=int(os.getenv('PORT', '5000')),
+        debug=debug,
+    )
