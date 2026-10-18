@@ -14,7 +14,7 @@ Running
 - The server binds to `HOST`/`PORT` from `.env` (default `0.0.0.0:5000`). Put it behind a reverse proxy with HTTPS for anything beyond a trusted LAN.
 
 - Schedule Options
-    - One time
+    - One time (runs at the next occurrence of the chosen time, then deactivates itself)
     - Hourly
     - Daily
     - Weekly

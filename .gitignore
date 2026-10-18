@@ -1,0 +1,26 @@
+# Secrets — never commit
+.env
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+instance/*
+!instance/*.txt
+
+# Uploaded scripts (keep the placeholder)
+uploaded_scripts/*
+!uploaded_scripts/*.txt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Editor/OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store

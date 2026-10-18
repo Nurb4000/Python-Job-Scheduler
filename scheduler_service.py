@@ -1,5 +1,5 @@
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -50,6 +50,7 @@ def run_schedule(schedule_id, app=None):
                 job_run.completed_at = now_utc()
                 db.session.commit()
                 _notify_owner(app, schedule, job_run)
+                _deactivate_if_once(app, schedule)
                 return
 
             success, error_msg, output = run_python_script(script_path)
@@ -69,6 +70,7 @@ def run_schedule(schedule_id, app=None):
 
             schedule.last_run_at = now_utc()
             db.session.commit()
+            _deactivate_if_once(app, schedule)
         except Exception as e:
             app.logger.error(f'Error running schedule {schedule_id} ({run_number}): {e}')
             try:
@@ -78,6 +80,20 @@ def run_schedule(schedule_id, app=None):
                 db.session.commit()
             except Exception:
                 db.session.rollback()
+            _deactivate_if_once(app, schedule)
+
+
+def _deactivate_if_once(app, schedule):
+    """One-time schedules run exactly once, then switch themselves off."""
+    if schedule.schedule_type != 'once' or not schedule.is_active:
+        return
+    try:
+        schedule.is_active = False
+        db.session.commit()
+        refresh_scheduler(app)
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f'Failed to deactivate once-schedule {schedule.id}: {e}')
 
 
 def _notify_owner(app, schedule, job_run):
@@ -108,11 +124,13 @@ def build_cron_expression(schedule):
     month = schedule.schedule_month or None
 
     if schedule_type == 'once':
+        # "One Time" = next occurrence of schedule_time (today if still
+        # ahead, otherwise tomorrow). The job deactivates itself after run.
         tz = get_tz()
         now = datetime.now(tz)
         run_date = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
         if run_date <= now:
-            run_date = run_date.replace(day=run_date.day + 1)
+            run_date += timedelta(days=1)
         return DateTrigger(run_date=run_date, timezone=tz)
 
     if schedule_type == 'hourly':
@@ -154,27 +172,10 @@ def reload_schedules(app, scheduler):
         scheduler.remove_all_jobs()
         schedules = Schedule.query.filter_by(is_active=True).all()
         for sched in schedules:
-            if sched.schedule_type == 'once':
-                tz = get_tz()
-                now = datetime.now(tz)
-                try:
-                    h, m = sched.schedule_time.split(':')
-                    run_time = now.replace(hour=int(h), minute=int(m), second=0, microsecond=0)
-                    if run_time <= now:
-                        continue
-                    trigger = DateTrigger(run_date=run_time, timezone=tz)
-                    scheduler.add_job(
-                        run_schedule,
-                        trigger=trigger,
-                        args=[sched.id, app],
-                        id=f'schedule_{sched.id}',
-                        replace_existing=True,
-                        misfire_grace_time=300
-                    )
-                    continue
-                except (ValueError, AttributeError):
-                    pass
-
+            # 'once' is handled by build_cron_expression too: it schedules the
+            # next occurrence of schedule_time, keeping save-time and
+            # restart-time behavior identical (the old special case here
+            # scheduled a different day and silently dropped passed jobs).
             try:
                 trigger = build_cron_expression(sched)
                 scheduler.add_job(

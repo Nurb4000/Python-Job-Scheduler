@@ -4,11 +4,12 @@ from datetime import datetime
 
 from flask import Blueprint, render_template, redirect, url_for, flash, request, current_app, send_file
 from flask_login import login_required, current_user
-from werkzeug.utils import secure_filename
 from models import User, Schedule, JobRun
 from forms import ScheduleForm, ScheduleFilterForm, UserForm
 from extensions import db
-from utils import generate_job_number, format_datetime, now_utc
+from utils import (
+    generate_job_number, format_datetime, now_utc, validate_script_upload
+)
 from scheduler_service import refresh_scheduler
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
@@ -89,17 +90,23 @@ def schedule_new():
 
     if form.validate_on_submit():
         script_file = request.files.get('script_file')
-        script_filename = form.job_name.data.replace(' ', '_')
-        if script_file and script_file.filename:
-            filename = secure_filename(script_file.filename)
-            scripts_dir = os.path.join(current_app.root_path, 'uploaded_scripts')
-            os.makedirs(scripts_dir, exist_ok=True)
-            filepath = os.path.join(scripts_dir, filename)
-            script_file.save(filepath)
-            script_filename = filename
+        if not script_file or not script_file.filename:
+            flash('A Python script (.py) upload is required.', 'danger')
+            return render_template('admin/schedule_form.html', form=form, title='New Schedule')
+        ok, result = validate_script_upload(script_file)
+        if not ok:
+            flash(result, 'danger')
+            return render_template('admin/schedule_form.html', form=form, title='New Schedule')
+
+        job_number = generate_job_number()
+        script_filename = f'{job_number}_{result}'
+        scripts_dir = os.path.join(current_app.root_path, 'uploaded_scripts')
+        os.makedirs(scripts_dir, exist_ok=True)
+        filepath = os.path.join(scripts_dir, script_filename)
+        script_file.save(filepath)
 
         schedule = Schedule(
-            job_number=generate_job_number(),
+            job_number=job_number,
             job_name=form.job_name.data,
             script_filename=script_filename,
             schedule_type=form.schedule_type.data,
@@ -149,12 +156,17 @@ def schedule_edit(id):
     if form.validate_on_submit():
         script_file = request.files.get('script_file')
         if script_file and script_file.filename:
-            filename = secure_filename(script_file.filename)
+            ok, result = validate_script_upload(script_file)
+            if not ok:
+                flash(result, 'danger')
+                return render_template('admin/schedule_form.html', form=form,
+                                       title='Edit Schedule', schedule=schedule)
+            new_filename = f'{schedule.job_number}_{result}'
             scripts_dir = os.path.join(current_app.root_path, 'uploaded_scripts')
             os.makedirs(scripts_dir, exist_ok=True)
-            filepath = os.path.join(scripts_dir, filename)
+            filepath = os.path.join(scripts_dir, new_filename)
             script_file.save(filepath)
-            schedule.script_filename = filename
+            schedule.script_filename = new_filename
 
         schedule.job_name = form.job_name.data
         schedule.schedule_type = form.schedule_type.data
@@ -258,6 +270,9 @@ def users():
 def user_new():
     form = UserForm()
     if form.validate_on_submit():
+        if not form.password.data:
+            flash('Password is required for new users.', 'danger')
+            return render_template('admin/user_form.html', form=form, title='New User')
         if User.query.filter_by(username=form.username.data).first():
             flash('Username already exists.', 'danger')
             return render_template('admin/user_form.html', form=form, title='New User')
@@ -311,6 +326,14 @@ def user_delete(id):
     user = User.query.get_or_404(id)
     if user.id == current_user.id:
         flash('Cannot delete yourself.', 'danger')
+        return redirect(url_for('admin.users'))
+    owned = Schedule.query.filter_by(created_by=user.id).count()
+    if owned:
+        flash(
+            f'Cannot delete {user.username}: they own {owned} schedule(s). '
+            'Delete or reassign those first.',
+            'danger'
+        )
         return redirect(url_for('admin.users'))
     username = user.username
     db.session.delete(user)

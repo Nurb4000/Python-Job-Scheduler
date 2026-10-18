@@ -7,6 +7,29 @@ from datetime import datetime
 
 import pytz
 from flask import current_app
+from werkzeug.utils import secure_filename
+
+MAX_SCRIPT_SIZE = 5 * 1024 * 1024
+ALLOWED_SCRIPT_EXTENSIONS = {'.py'}
+
+
+def validate_script_upload(script_file):
+    """Validate an uploaded script.
+
+    Returns (ok, filename_or_error). On success the second value is the
+    secure_filename of the upload; on failure it is a user-facing message.
+    """
+    filename = secure_filename(script_file.filename or '')
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in ALLOWED_SCRIPT_EXTENSIONS:
+        return False, 'Script must be a .py file.'
+    data = script_file.read()
+    script_file.seek(0)
+    if len(data) > MAX_SCRIPT_SIZE:
+        return False, 'Script exceeds the 5 MB size limit.'
+    if not filename:
+        return False, 'Invalid script filename.'
+    return True, filename
 
 
 def get_tz():
