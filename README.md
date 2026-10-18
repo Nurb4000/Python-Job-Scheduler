@@ -12,7 +12,7 @@ Simple job scheduling system for python scripts. Nothing real fancy, just enough
     - Weekly
     - Weekdays
     - Monthly
-    - Every 4 months ( to accomdate quarterly )
+    - Every 3 months (Quarterly)
     - Yearly
 
 A couple of screenshots of the interface

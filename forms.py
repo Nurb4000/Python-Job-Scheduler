@@ -34,7 +34,7 @@ class ScheduleForm(FlaskForm):
         ('weekdays', 'Weekdays (Mon-Fri)'),
         ('weekly', 'Weekly'),
         ('monthly', 'Monthly'),
-        ('quarterly', 'Every 4 Months'),
+        ('quarterly', 'Every 3 Months (Quarterly)'),
         ('yearly', 'Yearly')
     ], validators=[DataRequired()])
     schedule_day = StringField('Day of Month / Day of Week')
@@ -56,7 +56,7 @@ class ScheduleFilterForm(FlaskForm):
         ('weekdays', 'Weekdays (Mon-Fri)'),
         ('weekly', 'Weekly'),
         ('monthly', 'Monthly'),
-        ('quarterly', 'Every 4 Months'),
+        ('quarterly', 'Every 3 Months (Quarterly)'),
         ('yearly', 'Yearly')
     ])
     is_active = SelectField('Status', choices=[

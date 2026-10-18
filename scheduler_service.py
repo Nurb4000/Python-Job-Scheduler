@@ -137,7 +137,9 @@ def build_cron_expression(schedule):
     elif schedule_type == 'quarterly':
         cron_kwargs['day'] = day or 1
         if month and 1 <= month <= 12:
-            cron_kwargs['month'] = f'{month},{month+3},{month+6},{month+9}'
+            cron_kwargs['month'] = ','.join(
+                str(((month - 1 + i * 3) % 12) + 1) for i in range(4)
+            )
         else:
             cron_kwargs['month'] = '1,4,7,10'
     elif schedule_type == 'yearly':
