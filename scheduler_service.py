@@ -5,6 +5,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
 from extensions import db
@@ -176,9 +177,41 @@ def build_cron_expression(schedule):
     return CronTrigger(**cron_kwargs)
 
 
+def prune_job_runs(app):
+    """Delete JobRun rows older than JOB_RUN_RETENTION_DAYS.
+
+    Returns the number deleted; no-op when retention is 0 (keep forever).
+    Age is measured from completed_at, falling back to started_at so rows
+    stuck in 'running' are pruned too.
+    """
+    days = int(app.config.get('JOB_RUN_RETENTION_DAYS', 0) or 0)
+    if days <= 0:
+        return 0
+    with app.app_context():
+        cutoff = now_utc() - timedelta(days=days)
+        age = func.coalesce(JobRun.completed_at, JobRun.started_at)
+        deleted = (JobRun.query.filter(age < cutoff)
+                   .delete(synchronize_session=False))
+        db.session.commit()
+        if deleted:
+            app.logger.info(f'Pruned {deleted} job run(s) older than {days} days')
+        return deleted
+
+
 def reload_schedules(app, scheduler):
     with app.app_context():
         scheduler.remove_all_jobs()
+        # Maintenance job — remove_all_jobs() wipes it too, so re-add here
+        # so it survives every refresh (create/edit/delete of schedules).
+        scheduler.add_job(
+            prune_job_runs,
+            'interval',
+            days=1,
+            args=[app],
+            id='job_run_retention',
+            replace_existing=True,
+            misfire_grace_time=86400,
+        )
         schedules = Schedule.query.filter_by(is_active=True).all()
         for sched in schedules:
             # 'once' is handled by build_cron_expression too: it schedules the
@@ -204,6 +237,12 @@ def start_scheduler(app):
     scheduler.start()
     reload_schedules(app, scheduler)
     app.scheduler = scheduler
+    # Prune once at startup too, so long-idle installs clean up immediately
+    # instead of waiting up to a day.
+    try:
+        prune_job_runs(app)
+    except Exception as e:
+        app.logger.error(f'Job-run retention prune failed at startup: {e}')
     return scheduler
 
 

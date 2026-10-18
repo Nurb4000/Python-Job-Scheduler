@@ -12,6 +12,8 @@ Running
 - `python app.py scheduler` — web UI **plus** the background scheduler. Run this on exactly one host, or every job will fire twice.
 - Copy `env-sample` to `.env` and set your values. Leave `FLASK_DEBUG` unset or `false` outside local development.
 - The server binds to `HOST`/`PORT` from `.env` (default `0.0.0.0:5000`). Put it behind a reverse proxy with HTTPS for anything beyond a trusted LAN.
+- Login brute-force protection is on by default (`LOGIN_MAX_ATTEMPTS` failed logins per IP+username per `LOGIN_WINDOW_SECONDS`, then a temporary lockout). Set `LOGIN_MAX_ATTEMPTS=0` to disable.
+- Job-run history is kept forever by default. Set `JOB_RUN_RETENTION_DAYS` (e.g. `90`) to have the scheduler prune older run rows daily.
 
 - Schedule Options
     - One time (runs at the next occurrence of the chosen time, then deactivates itself)

@@ -4,6 +4,9 @@
 <div class="login-container">
     <div class="login-card">
         <h1>Sign In</h1>
+        {% if rate_limited %}
+        <span class="error">Too many failed attempts. Try again in {{ rate_limited }} seconds.</span>
+        {% endif %}
         <form method="POST">
             {{ form.hidden_tag() }}
             <div class="form-group">

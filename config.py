@@ -28,3 +28,10 @@ class Config:
     SMTP_FROM = os.getenv('SMTP_FROM', '')
     EMAIL_ENABLED = os.getenv('EMAIL_ENABLED', 'true').lower() == 'true'
     SCRIPT_TIMEOUT = int(os.getenv('SCRIPT_TIMEOUT', '300'))
+    # 0 = keep JobRun history forever; otherwise rows older than N days are
+    # pruned daily by the scheduler (and once at startup).
+    JOB_RUN_RETENTION_DAYS = int(os.getenv('JOB_RUN_RETENTION_DAYS', '0'))
+    # Failed logins allowed per IP+username before a temporary lockout;
+    # 0 disables login rate limiting.
+    LOGIN_MAX_ATTEMPTS = int(os.getenv('LOGIN_MAX_ATTEMPTS', '5'))
+    LOGIN_WINDOW_SECONDS = int(os.getenv('LOGIN_WINDOW_SECONDS', '900'))

@@ -18,3 +18,10 @@ PORT=5000
 # Max seconds an uploaded script may run before it is killed (with its
 # whole process group)
 SCRIPT_TIMEOUT=300
+# Days of JobRun history to keep; 0 = keep forever. When > 0, old rows are
+# deleted daily by the scheduler (and once at startup).
+JOB_RUN_RETENTION_DAYS=0
+# Login brute-force protection: failed attempts allowed per IP+username
+# within LOGIN_WINDOW_SECONDS before a temporary lockout. 0 disables it.
+LOGIN_MAX_ATTEMPTS=5
+LOGIN_WINDOW_SECONDS=900
