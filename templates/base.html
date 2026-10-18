@@ -19,7 +19,10 @@
                 <a href="{{ url_for('admin.users') }}" class="nav-link">Users</a>
                 {% endif %}
                 <a href="{{ url_for('jobs.history') }}" class="nav-link">Job Runs</a>
-                <a href="{{ url_for('auth.logout') }}" class="nav-link">Logout</a>
+                <form method="POST" action="{{ url_for('auth.logout') }}" style="display:inline">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="nav-link nav-link-button">Logout</button>
+                </form>
             </div>
             {% endif %}
         </div>

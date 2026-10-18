@@ -5,16 +5,17 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
+from sqlalchemy.exc import IntegrityError
 
 from extensions import db
 from models import Schedule, JobRun, User
 from utils import (
     generate_run_number, run_python_script, send_email,
-    format_datetime, now_utc, get_tz
+    format_datetime, now_utc, get_tz, truncate_output
 )
 
 
-def run_schedule(schedule_id, app=None):
+def run_schedule(schedule_id, app=None, triggered_by=None):
     if app is None:
         from app import create_app
         app = create_app()
@@ -27,19 +28,27 @@ def run_schedule(schedule_id, app=None):
         run_number = generate_run_number()
         job_name = schedule.job_name
 
-        job_run = JobRun(
-            run_number=run_number,
-            schedule_id=schedule.id,
-            job_name=job_name,
-            started_at=now_utc(),
-            status='running'
-        )
-        db.session.add(job_run)
-        try:
-            db.session.commit()
-        except Exception as e:
-            db.session.rollback()
-            app.logger.error(f'Failed to create JobRun for schedule {schedule_id}: {e}')
+        # Allocate a run number; retry if a concurrent run wins the race.
+        job_run = None
+        for _ in range(5):
+            job_run = JobRun(
+                run_number=run_number,
+                schedule_id=schedule.id,
+                job_name=job_name,
+                started_at=now_utc(),
+                status='running',
+                created_by=triggered_by
+            )
+            db.session.add(job_run)
+            try:
+                db.session.commit()
+                break
+            except IntegrityError:
+                db.session.rollback()
+                job_run = None
+                run_number = generate_run_number()
+        if job_run is None:
+            app.logger.error(f'Failed to allocate run number for schedule {schedule_id}')
             return
 
         try:
@@ -54,7 +63,7 @@ def run_schedule(schedule_id, app=None):
                 return
 
             success, error_msg, output = run_python_script(script_path)
-            job_run.output_text = output
+            job_run.output_text = truncate_output(output)
             job_run.completed_at = now_utc()
 
             if success:

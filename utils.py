@@ -1,4 +1,5 @@
 import os
+import signal
 import subprocess
 import smtplib
 from email.mime.text import MIMEText
@@ -45,21 +46,40 @@ def now_tz():
 
 
 def generate_job_number():
-    from extensions import db
     from models import Schedule
     prefix = 'JOB'
     last = Schedule.query.order_by(Schedule.id.desc()).first()
     num = 1 if last is None else last.id + 1
+    # skip numbers already taken (e.g. left over after deletes or manual rows)
+    while Schedule.query.filter_by(job_number=f'{prefix}-{num:05d}').first():
+        num += 1
     return f'{prefix}-{num:05d}'
 
 
 def generate_run_number():
-    from extensions import db
     from models import JobRun
     prefix = 'R'
     last = JobRun.query.order_by(JobRun.id.desc()).first()
     num = 1 if last is None else last.id + 1
+    while JobRun.query.filter_by(run_number=f'{prefix}-{num:05d}').first():
+        num += 1
     return f'{prefix}-{num:05d}'
+
+
+MAX_OUTPUT_CHARS = 100_000
+
+
+def truncate_output(output):
+    """Cap script output before it goes into the database."""
+    if output is None or len(output) <= MAX_OUTPUT_CHARS:
+        return output
+    half = MAX_OUTPUT_CHARS // 2
+    omitted = len(output) - 2 * half
+    return (
+        output[:half]
+        + f'\n... [output truncated: {omitted} of {len(output)} characters omitted] ...\n'
+        + output[-half:]
+    )
 
 
 def format_datetime(dt, fmt='%Y-%m-%d %I:%M %p'):
@@ -72,25 +92,55 @@ def format_datetime(dt, fmt='%Y-%m-%d %I:%M %p'):
 
 
 def run_python_script(script_path):
+    timeout = 300
     try:
-        result = subprocess.run(
-            ['python3', script_path],
-            capture_output=True, text=True, timeout=300
-        )
-        output = ''
-        if result.stdout:
-            output += result.stdout
-        if result.stderr:
-            if output:
-                output += '\n'
-            output += result.stderr
-        if result.returncode != 0:
-            return False, result.stderr or 'Script failed', output
-        return True, '', output
+        timeout = int(current_app.config.get('SCRIPT_TIMEOUT', 300))
+    except (RuntimeError, ValueError):
+        pass
+
+    proc = subprocess.Popen(
+        ['python3', script_path],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        return False, 'Script timed out after 300 seconds', ''
+        # Kill the whole process group so child processes don't leak.
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+        try:
+            stdout, stderr = proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            stdout, stderr = '', ''
+        output = _combine_output(stdout, stderr)
+        return False, f'Script timed out after {timeout} seconds', output
     except Exception as e:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except Exception:
+            pass
         return False, str(e), ''
+
+    output = _combine_output(stdout, stderr)
+    if proc.returncode != 0:
+        return False, stderr or 'Script failed', output
+    return True, '', output
+
+
+def _combine_output(stdout, stderr):
+    output = ''
+    if stdout:
+        output += stdout
+    if stderr:
+        if output:
+            output += '\n'
+        output += stderr
+    return output
 
 
 def send_email(to_addr, subject, body):

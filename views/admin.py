@@ -4,6 +4,7 @@ from datetime import datetime
 
 from flask import Blueprint, render_template, redirect, url_for, flash, request, current_app, send_file
 from flask_login import login_required, current_user
+from sqlalchemy.exc import IntegrityError
 from models import User, Schedule, JobRun
 from forms import ScheduleForm, ScheduleFilterForm, UserForm
 from extensions import db
@@ -13,6 +14,12 @@ from utils import (
 from scheduler_service import refresh_scheduler
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
+
+SCHEDULE_SORTS = {
+    'id', 'job_number', 'job_name', 'schedule_type', 'schedule_time',
+    'is_active', 'created_at', 'updated_at', 'last_run_at',
+}
+USER_SORTS = {'id', 'username', 'email', 'is_admin', 'is_active', 'created_at'}
 
 
 def admin_required(f):
@@ -68,7 +75,9 @@ def schedules():
 
     sort = request.args.get('sort', 'id')
     direction = request.args.get('direction', 'desc')
-    sort_col = getattr(Schedule, sort, Schedule.id)
+    if sort not in SCHEDULE_SORTS:
+        sort = 'id'
+    sort_col = getattr(Schedule, sort)
     if direction == 'desc':
         sort_col = sort_col.desc()
     query = query.order_by(sort_col)
@@ -87,6 +96,8 @@ def schedules():
 def schedule_new():
     form = ScheduleForm()
     form.viewers.choices = [(u.id, f'{u.username} ({u.email})') for u in User.query.filter_by(is_active=True).order_by(User.username).all()]
+    if request.method == 'GET':
+        form.is_active.data = True
 
     if form.validate_on_submit():
         script_file = request.files.get('script_file')
@@ -98,38 +109,59 @@ def schedule_new():
             flash(result, 'danger')
             return render_template('admin/schedule_form.html', form=form, title='New Schedule')
 
-        job_number = generate_job_number()
-        script_filename = f'{job_number}_{result}'
+        try:
+            schedule_day = int(form.schedule_day.data) if form.schedule_day.data else None
+        except (ValueError, TypeError):
+            schedule_day = None
+        try:
+            schedule_month = int(form.schedule_month.data) if form.schedule_month.data else None
+        except (ValueError, TypeError):
+            schedule_month = None
+        try:
+            interval_hours = int(form.interval_hours.data) if form.interval_hours.data else None
+        except (ValueError, TypeError):
+            interval_hours = None
+        viewers = User.query.filter(User.id.in_(form.viewers.data or [])).all()
+
+        # Allocate a unique job number; retry if a concurrent request wins the race.
+        schedule = None
+        for _ in range(5):
+            schedule = Schedule(
+                job_number=generate_job_number(),
+                job_name=form.job_name.data,
+                script_filename='pending',
+                schedule_type=form.schedule_type.data,
+                schedule_time=form.schedule_time.data,
+                schedule_day=schedule_day,
+                schedule_month=schedule_month,
+                interval_hours=interval_hours,
+                is_active=form.is_active.data,
+                created_by=current_user.id
+            )
+            schedule.viewers = viewers
+            db.session.add(schedule)
+            try:
+                db.session.commit()
+                break
+            except IntegrityError:
+                db.session.rollback()
+                schedule = None
+        if schedule is None:
+            flash('Could not allocate a unique job number. Please try again.', 'danger')
+            return render_template('admin/schedule_form.html', form=form, title='New Schedule')
+
+        script_filename = f'{schedule.job_number}_{result}'
         scripts_dir = os.path.join(current_app.root_path, 'uploaded_scripts')
-        os.makedirs(scripts_dir, exist_ok=True)
-        filepath = os.path.join(scripts_dir, script_filename)
-        script_file.save(filepath)
-
-        schedule = Schedule(
-            job_number=job_number,
-            job_name=form.job_name.data,
-            script_filename=script_filename,
-            schedule_type=form.schedule_type.data,
-            schedule_time=form.schedule_time.data,
-            is_active=form.is_active.data if 'is_active' in request.form else True,
-            created_by=current_user.id
-        )
-
         try:
-            schedule.schedule_day = int(form.schedule_day.data) if form.schedule_day.data else None
-        except (ValueError, TypeError):
-            schedule.schedule_day = None
-        try:
-            schedule.schedule_month = int(form.schedule_month.data) if form.schedule_month.data else None
-        except (ValueError, TypeError):
-            schedule.schedule_month = None
-        try:
-            schedule.interval_hours = int(form.interval_hours.data) if form.interval_hours.data else None
-        except (ValueError, TypeError):
-            schedule.interval_hours = None
+            os.makedirs(scripts_dir, exist_ok=True)
+            script_file.save(os.path.join(scripts_dir, script_filename))
+        except OSError as e:
+            db.session.delete(schedule)
+            db.session.commit()
+            flash(f'Failed to save uploaded script: {e}', 'danger')
+            return render_template('admin/schedule_form.html', form=form, title='New Schedule')
 
-        schedule.viewers = User.query.filter(User.id.in_(form.viewers.data or [])).all()
-        db.session.add(schedule)
+        schedule.script_filename = script_filename
         db.session.commit()
         refresh_scheduler(current_app._get_current_object())
         flash(f'Schedule {schedule.job_number} created.', 'success')
@@ -152,6 +184,7 @@ def schedule_edit(id):
         form.schedule_month.data = str(schedule.schedule_month) if schedule.schedule_month else ''
         form.interval_hours.data = schedule.interval_hours
         form.script_filename.data = schedule.script_filename
+        form.is_active.data = schedule.is_active
 
     if form.validate_on_submit():
         script_file = request.files.get('script_file')
@@ -171,7 +204,7 @@ def schedule_edit(id):
         schedule.job_name = form.job_name.data
         schedule.schedule_type = form.schedule_type.data
         schedule.schedule_time = form.schedule_time.data
-        schedule.is_active = form.is_active.data if 'is_active' in request.form else False
+        schedule.is_active = form.is_active.data
 
         try:
             schedule.schedule_day = int(form.schedule_day.data) if form.schedule_day.data else None
@@ -217,7 +250,8 @@ def schedule_run_now(id):
     from scheduler_service import run_schedule
     app = current_app._get_current_object()
     threading.Thread(
-        target=run_schedule, args=(schedule.id, app), daemon=True
+        target=run_schedule, args=(schedule.id, app, current_user.id),
+        daemon=True
     ).start()
     flash(f'Schedule {job_number} triggered. Refresh to see results in history.', 'info')
     return redirect(url_for('admin.schedules'))
@@ -251,7 +285,9 @@ def users():
         )
     sort = request.args.get('sort', 'id')
     direction = request.args.get('direction', 'desc')
-    sort_col = getattr(User, sort, User.id)
+    if sort not in USER_SORTS:
+        sort = 'id'
+    sort_col = getattr(User, sort)
     if direction == 'desc':
         sort_col = sort_col.desc()
     query = query.order_by(sort_col)

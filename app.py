@@ -10,6 +10,14 @@ def create_app():
     app = Flask(__name__)
     app.config.from_object('config.Config')
 
+    from config import WEAK_SECRET_KEYS
+    if app.config['SECRET_KEY'] in WEAK_SECRET_KEYS:
+        raise RuntimeError(
+            'SECRET_KEY is missing or still a sample value. '
+            'Copy env-sample to .env and set SECRET_KEY to a long random string '
+            '(e.g. `python3 -c "import secrets; print(secrets.token_hex(32))"`).'
+        )
+
     from extensions import db, login_manager, csrf
     db.init_app(app)
     login_manager.init_app(app)
@@ -39,13 +47,20 @@ def _ensure_admin(app):
     from extensions import db
     admin = User.query.filter_by(is_admin=True).first()
     if not admin:
+        password = app.config.get('ADMIN_PASSWORD', '')
+        if not password or password == 'admin123':
+            raise RuntimeError(
+                'No admin account exists and ADMIN_PASSWORD is unset or still '
+                'the insecure default. Set a strong ADMIN_PASSWORD in .env '
+                'before the first run.'
+            )
         admin = User(
             username='admin',
             email=app.config['ADMIN_EMAIL'],
             is_admin=True,
             is_active=True
         )
-        admin.set_password(app.config['ADMIN_PASSWORD'])
+        admin.set_password(password)
         db.session.add(admin)
         db.session.commit()
 

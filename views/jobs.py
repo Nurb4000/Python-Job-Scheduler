@@ -6,6 +6,11 @@ from utils import format_datetime
 
 jobs_bp = Blueprint('jobs', __name__)
 
+RUN_SORTS = {
+    'run_number', 'job_name', 'status', 'started_at', 'completed_at',
+    'schedule_id',
+}
+
 
 @jobs_bp.route('/')
 @login_required
@@ -37,7 +42,9 @@ def history():
 
     sort = request.args.get('sort', 'started_at')
     direction = request.args.get('direction', 'desc')
-    sort_col = getattr(JobRun, sort, JobRun.started_at)
+    if sort not in RUN_SORTS:
+        sort = 'started_at'
+    sort_col = getattr(JobRun, sort)
     if direction == 'desc':
         sort_col = sort_col.desc()
     query = query.order_by(sort_col)

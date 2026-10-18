@@ -15,3 +15,6 @@ EMAIL_ENABLED=true
 FLASK_DEBUG=false
 HOST=0.0.0.0
 PORT=5000
+# Max seconds an uploaded script may run before it is killed (with its
+# whole process group)
+SCRIPT_TIMEOUT=300
