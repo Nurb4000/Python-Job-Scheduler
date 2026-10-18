@@ -15,6 +15,27 @@ Running
 - Login brute-force protection is on by default (`LOGIN_MAX_ATTEMPTS` failed logins per IP+username per `LOGIN_WINDOW_SECONDS`, then a temporary lockout). Set `LOGIN_MAX_ATTEMPTS=0` to disable.
 - Job-run history is kept forever by default. Set `JOB_RUN_RETENTION_DAYS` (e.g. `90`) to have the scheduler prune older run rows daily.
 
+Running as a service / in production
+
+- The built-in server (`python app.py`) is Flask's development server — fine on a trusted LAN, not for the public internet. Put it behind a reverse proxy with HTTPS, and pick one of:
+    - **All-in-one (simplest):** run `python app.py scheduler` under systemd — web UI and scheduler in one process; jobs fire on that host.
+    - **Split:** serve the web UI with gunicorn (`pip install -r requirements-prod.txt`, then `gunicorn -w 1 -b 127.0.0.1:5000 'app:create_app()'`) and run the scheduler on **exactly one** host with `python app.py scheduler no-web`. Keep gunicorn workers at 1 — the SQLite database and the in-memory login rate limiter are per-process.
+- systemd unit for the all-in-one host (`/etc/systemd/system/pjscheduler.service`):
+
+      [Unit]
+      Description=Python Job Scheduler
+      After=network.target
+
+      [Service]
+      WorkingDirectory=/opt/python-job-scheduler
+      ExecStart=/opt/python-job-scheduler/venv/bin/python app.py scheduler
+      Restart=on-failure
+
+      [Install]
+      WantedBy=multi-user.target
+
+  On a dedicated scheduler host use `ExecStart=... app.py scheduler no-web` instead.
+
 - Schedule Options
     - One time (runs at the next occurrence of the chosen time, then deactivates itself)
     - Hourly

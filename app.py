@@ -45,14 +45,15 @@ def create_app():
 def _ensure_admin(app):
     from models import User
     from extensions import db
+    from config import WEAK_ADMIN_PASSWORDS
     admin = User.query.filter_by(is_admin=True).first()
     if not admin:
         password = app.config.get('ADMIN_PASSWORD', '')
-        if not password or password == 'admin123':
+        if password.lower() in WEAK_ADMIN_PASSWORDS:
             raise RuntimeError(
-                'No admin account exists and ADMIN_PASSWORD is unset or still '
-                'the insecure default. Set a strong ADMIN_PASSWORD in .env '
-                'before the first run.'
+                'No admin account exists and ADMIN_PASSWORD is unset, still the '
+                'sample value, or a common placeholder. Set a strong '
+                'ADMIN_PASSWORD in .env before the first run.'
             )
         admin = User(
             username='admin',
@@ -67,18 +68,32 @@ def _ensure_admin(app):
 
 if __name__ == '__main__':
     app = create_app()
+    modes = [a for a in sys.argv[1:] if not a.startswith('-')]
     debug = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
-    # With the Werkzeug reloader, __main__ executes in both the parent and the
-    # child process. Only start the scheduler in the child (or always, when the
-    # reloader is off) so jobs don't get registered and fired twice.
-    if 'scheduler' in sys.argv and (
-        not debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true'
-    ):
+
+    if 'no-web' in modes:
+        # Scheduler-only process: never runs the web server (or its reloader).
+        # Pair with a separate web process (e.g. gunicorn) sharing the DB.
+        import threading
+        if 'scheduler' not in modes:
+            print('`no-web` only makes sense together with `scheduler`.', file=sys.stderr)
+            sys.exit(1)
         from scheduler_service import start_scheduler
         scheduler = start_scheduler(app)
-        print(f'Scheduler started with {len(scheduler.get_jobs())} jobs')
-    app.run(
-        host=os.getenv('HOST', '0.0.0.0'),
-        port=int(os.getenv('PORT', '5000')),
-        debug=debug,
-    )
+        print(f'Scheduler started with {len(scheduler.get_jobs())} jobs (web disabled)', flush=True)
+        threading.Event().wait()
+    else:
+        # With the Werkzeug reloader, __main__ executes in both the parent and the
+        # child process. Only start the scheduler in the child (or always, when the
+        # reloader is off) so jobs don't get registered and fired twice.
+        if 'scheduler' in modes and (
+            not debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true'
+        ):
+            from scheduler_service import start_scheduler
+            scheduler = start_scheduler(app)
+            print(f'Scheduler started with {len(scheduler.get_jobs())} jobs', flush=True)
+        app.run(
+            host=os.getenv('HOST', '0.0.0.0'),
+            port=int(os.getenv('PORT', '5000')),
+            debug=debug,
+        )

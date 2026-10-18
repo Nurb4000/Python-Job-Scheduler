@@ -59,7 +59,7 @@ def run_schedule(schedule_id, app=None, triggered_by=None):
                 job_run.error_message = f'Script file not found: {script_path}'
                 job_run.completed_at = now_utc()
                 db.session.commit()
-                _notify_owner(app, schedule, job_run)
+                _notify_watchers(app, schedule, job_run)
                 _deactivate_if_once(app, schedule)
                 return
 
@@ -76,7 +76,7 @@ def run_schedule(schedule_id, app=None, triggered_by=None):
             db.session.commit()
 
             if not success:
-                _notify_owner(app, schedule, job_run)
+                _notify_watchers(app, schedule, job_run)
 
             schedule.last_run_at = now_utc()
             db.session.commit()
@@ -106,17 +106,27 @@ def _deactivate_if_once(app, schedule):
         app.logger.error(f'Failed to deactivate once-schedule {schedule.id}: {e}')
 
 
-def _notify_owner(app, schedule, job_run):
-    owner = schedule.creator
-    if owner and owner.email:
+def _notify_watchers(app, schedule, job_run):
+    """Email the schedule's creator AND its viewers about a failed run."""
+    recipients = []
+    if schedule.creator and schedule.creator.email:
+        recipients.append(schedule.creator.email)
+    for viewer in schedule.viewers:
+        if viewer.email:
+            recipients.append(viewer.email)
+    recipients = list(dict.fromkeys(recipients))  # dedupe, keep order
+    body = (
+        f'Schedule: {schedule.job_number}\n'
+        f'Job: {schedule.job_name}\n'
+        f'Run: {job_run.run_number}\n'
+        f'Error: {job_run.error_message}\n'
+        f'Time: {format_datetime(job_run.started_at)}'
+    )
+    for addr in recipients:
         send_email(
-            owner.email,
+            addr,
             f'Job Failed: {schedule.job_name} ({job_run.run_number})',
-            f'Schedule: {schedule.job_number}\n'
-            f'Job: {schedule.job_name}\n'
-            f'Run: {job_run.run_number}\n'
-            f'Error: {job_run.error_message}\n'
-            f'Time: {format_datetime(job_run.started_at)}'
+            body
         )
 
 

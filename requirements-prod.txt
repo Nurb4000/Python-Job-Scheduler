@@ -1,0 +1,4 @@
+# Optional dependencies for running behind a reverse proxy in production
+# (see "Running as a service" in the README). The app itself runs fine with
+# just requirements.txt.
+gunicorn

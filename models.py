@@ -1,7 +1,7 @@
-from datetime import datetime
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 from extensions import db
+from utils import now_utc
 
 
 schedule_viewers = db.Table('schedule_viewers',
@@ -17,7 +17,7 @@ class User(UserMixin, db.Model):
     password_hash = db.Column(db.String(256), nullable=False)
     is_admin = db.Column(db.Boolean, default=False)
     is_active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=now_utc)
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -37,8 +37,8 @@ class Schedule(db.Model):
     schedule_time = db.Column(db.String(5), nullable=False)
     interval_hours = db.Column(db.Integer, nullable=True)
     is_active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=now_utc)
+    updated_at = db.Column(db.DateTime, default=now_utc, onupdate=now_utc)
     created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     last_run_at = db.Column(db.DateTime, nullable=True)
 
@@ -54,7 +54,7 @@ class JobRun(db.Model):
     run_number = db.Column(db.String(20), unique=True, nullable=False)
     schedule_id = db.Column(db.Integer, db.ForeignKey('schedule.id'), nullable=False)
     job_name = db.Column(db.String(200), nullable=False, index=True)
-    started_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    started_at = db.Column(db.DateTime, nullable=False, default=now_utc)
     completed_at = db.Column(db.DateTime, nullable=True)
     status = db.Column(db.String(20), nullable=False, default='pending')
     error_message = db.Column(db.Text, nullable=True)
@@ -62,3 +62,16 @@ class JobRun(db.Model):
     created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
 
     creator = db.relationship('User', backref='job_runs', foreign_keys=[created_by])
+
+
+class AuditLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    created_at = db.Column(db.DateTime, default=now_utc, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    # Username captured at action time, so history survives user deletion.
+    user_label = db.Column(db.String(80), nullable=False)
+    action = db.Column(db.String(40), nullable=False, index=True)
+    target = db.Column(db.String(200), nullable=False)
+    detail = db.Column(db.Text, nullable=True)
+
+    user = db.relationship('User', backref='audit_entries', foreign_keys=[user_id])

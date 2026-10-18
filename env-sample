@@ -1,7 +1,10 @@
 SECRET_KEY=change-this-to-a-random-secret-key
 DATABASE_URL=sqlite:///python_job_scheduler.db
 ADMIN_EMAIL=admin@example.com
-ADMIN_PASSWORD=admin123
+# Required before the first run: a strong password used to seed the admin
+# account. (The app refuses to start with this blank or a common placeholder
+# when no admin account exists yet.)
+ADMIN_PASSWORD=
 TIMEZONE=America/New_York
 SMTP_SERVER=smtp.test.com
 SMTP_PORT=587

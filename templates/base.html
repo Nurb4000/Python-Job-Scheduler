@@ -17,6 +17,7 @@
                 <a href="{{ url_for('admin.dashboard') }}" class="nav-link">Dashboard</a>
                 <a href="{{ url_for('admin.schedules') }}" class="nav-link">Schedules</a>
                 <a href="{{ url_for('admin.users') }}" class="nav-link">Users</a>
+                <a href="{{ url_for('admin.audit_log') }}" class="nav-link">Audit</a>
                 {% endif %}
                 <a href="{{ url_for('jobs.history') }}" class="nav-link">Job Runs</a>
                 <form method="POST" action="{{ url_for('auth.logout') }}" style="display:inline">

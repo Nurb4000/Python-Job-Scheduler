@@ -4,7 +4,7 @@ import subprocess
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytz
 from flask import current_app
@@ -38,7 +38,9 @@ def get_tz():
 
 
 def now_utc():
-    return datetime.utcnow()
+    # Naive UTC to match the DateTime columns (as datetime.utcnow did),
+    # without the 3.12+ deprecation warning.
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def now_tz():

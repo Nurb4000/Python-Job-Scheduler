@@ -1,11 +1,13 @@
 import os
 import threading
-from datetime import datetime
 
-from flask import Blueprint, render_template, redirect, url_for, flash, request, current_app, send_file
+from flask import (
+    Blueprint, render_template, redirect, url_for, flash, request,
+    current_app, send_file, abort
+)
 from flask_login import login_required, current_user
 from sqlalchemy.exc import IntegrityError
-from models import User, Schedule, JobRun
+from models import User, Schedule, JobRun, AuditLog
 from forms import ScheduleForm, ScheduleFilterForm, UserForm
 from extensions import db
 from utils import (
@@ -27,10 +29,80 @@ def admin_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         if not current_user.is_admin:
+            if request.method not in ('GET', 'HEAD'):
+                # POSTs from non-admins get a clear 403, not a redirect
+                # that looks like success to an API client.
+                abort(403)
             flash('Admin access required.', 'danger')
             return redirect(url_for('jobs.history'))
         return f(*args, **kwargs)
     return decorated
+
+
+def _audit(action, target, detail=''):
+    """Record an admin action (committed along with the caller's work)."""
+    db.session.add(AuditLog(
+        user_id=current_user.id if current_user.is_authenticated else None,
+        user_label=current_user.username if current_user.is_authenticated else 'system',
+        action=action,
+        target=target,
+        detail=detail or None,
+    ))
+
+
+def _parse_schedule_fields(form):
+    """Validate and parse day/month/interval form fields.
+
+    Returns (schedule_day, schedule_month, interval_hours, error_message).
+    """
+    stype = form.schedule_type.data
+    schedule_day = schedule_month = interval_hours = None
+
+    day_raw = (form.schedule_day.data or '').strip()
+    if day_raw:
+        try:
+            schedule_day = int(day_raw)
+        except ValueError:
+            return None, None, None, (
+                f'Day "{day_raw}" is not a number. Use 0-6 for weekly or '
+                '1-31 for monthly/quarterly/yearly schedules.'
+            )
+        if stype == 'weekly' and not 0 <= schedule_day <= 6:
+            return None, None, None, (
+                f'Weekly day must be 0-6 (0=Sunday, 6=Saturday); got {schedule_day}.'
+            )
+        if stype in ('monthly', 'quarterly', 'yearly') and not 1 <= schedule_day <= 31:
+            return None, None, None, f'Day of month must be 1-31; got {schedule_day}.'
+
+    month_raw = (form.schedule_month.data or '').strip()
+    if month_raw:
+        try:
+            schedule_month = int(month_raw)
+        except ValueError:
+            return None, None, None, f'Month "{month_raw}" is not a number (use 1-12).'
+        if not 1 <= schedule_month <= 12:
+            return None, None, None, f'Month must be 1-12; got {schedule_month}.'
+
+    if form.interval_hours.data is not None:
+        interval_hours = form.interval_hours.data
+        if interval_hours < 1:
+            return None, None, None, 'Interval must be at least 1 hour.'
+
+    return schedule_day, schedule_month, interval_hours, None
+
+
+def _remove_orphaned_script(filename):
+    """Best-effort deletion of an uploaded script no schedule references."""
+    if not filename or filename == 'pending':
+        return
+    try:
+        if Schedule.query.filter_by(script_filename=filename).first():
+            return
+        path = os.path.join(current_app.root_path, 'uploaded_scripts', filename)
+        if os.path.isfile(path):
+            os.remove(path)
+    except OSError as e:
+        current_app.logger.warning(f'Could not remove script file {filename}: {e}')
 
 
 @admin_bp.route('/')
@@ -109,18 +181,10 @@ def schedule_new():
             flash(result, 'danger')
             return render_template('admin/schedule_form.html', form=form, title='New Schedule')
 
-        try:
-            schedule_day = int(form.schedule_day.data) if form.schedule_day.data else None
-        except (ValueError, TypeError):
-            schedule_day = None
-        try:
-            schedule_month = int(form.schedule_month.data) if form.schedule_month.data else None
-        except (ValueError, TypeError):
-            schedule_month = None
-        try:
-            interval_hours = int(form.interval_hours.data) if form.interval_hours.data else None
-        except (ValueError, TypeError):
-            interval_hours = None
+        schedule_day, schedule_month, interval_hours, err = _parse_schedule_fields(form)
+        if err:
+            flash(err, 'danger')
+            return render_template('admin/schedule_form.html', form=form, title='New Schedule')
         viewers = User.query.filter(User.id.in_(form.viewers.data or [])).all()
 
         # Allocate a unique job number; retry if a concurrent request wins the race.
@@ -162,6 +226,7 @@ def schedule_new():
             return render_template('admin/schedule_form.html', form=form, title='New Schedule')
 
         schedule.script_filename = script_filename
+        _audit('schedule.create', schedule.job_number, schedule.job_name)
         db.session.commit()
         refresh_scheduler(current_app._get_current_object())
         flash(f'Schedule {schedule.job_number} created.', 'success')
@@ -187,6 +252,13 @@ def schedule_edit(id):
         form.is_active.data = schedule.is_active
 
     if form.validate_on_submit():
+        schedule_day, schedule_month, interval_hours, err = _parse_schedule_fields(form)
+        if err:
+            flash(err, 'danger')
+            return render_template('admin/schedule_form.html', form=form,
+                                   title='Edit Schedule', schedule=schedule)
+
+        old_filename = schedule.script_filename
         script_file = request.files.get('script_file')
         if script_file and script_file.filename:
             ok, result = validate_script_upload(script_file)
@@ -205,22 +277,15 @@ def schedule_edit(id):
         schedule.schedule_type = form.schedule_type.data
         schedule.schedule_time = form.schedule_time.data
         schedule.is_active = form.is_active.data
-
-        try:
-            schedule.schedule_day = int(form.schedule_day.data) if form.schedule_day.data else None
-        except (ValueError, TypeError):
-            schedule.schedule_day = None
-        try:
-            schedule.schedule_month = int(form.schedule_month.data) if form.schedule_month.data else None
-        except (ValueError, TypeError):
-            schedule.schedule_month = None
-        try:
-            schedule.interval_hours = int(form.interval_hours.data) if form.interval_hours.data else None
-        except (ValueError, TypeError):
-            schedule.interval_hours = None
+        schedule.schedule_day = schedule_day
+        schedule.schedule_month = schedule_month
+        schedule.interval_hours = interval_hours
 
         schedule.viewers = User.query.filter(User.id.in_(form.viewers.data or [])).all()
+        _audit('schedule.update', schedule.job_number, schedule.job_name)
         db.session.commit()
+        if old_filename != schedule.script_filename:
+            _remove_orphaned_script(old_filename)
         refresh_scheduler(current_app._get_current_object())
         flash(f'Schedule {schedule.job_number} updated.', 'success')
         return redirect(url_for('admin.schedules'))
@@ -234,8 +299,11 @@ def schedule_edit(id):
 def schedule_delete(id):
     schedule = Schedule.query.get_or_404(id)
     job_number = schedule.job_number
+    script_filename = schedule.script_filename
     db.session.delete(schedule)
+    _audit('schedule.delete', job_number)
     db.session.commit()
+    _remove_orphaned_script(script_filename)
     refresh_scheduler(current_app._get_current_object())
     flash(f'Schedule {job_number} deleted.', 'success')
     return redirect(url_for('admin.schedules'))
@@ -267,6 +335,19 @@ def schedule_download_script(id):
         flash('Script file not found on disk.', 'danger')
         return redirect(url_for('admin.schedules'))
     return send_file(script_path, as_attachment=True, download_name=schedule.script_filename)
+
+
+@admin_bp.route('/audit')
+@login_required
+@admin_required
+def audit_log():
+    page = request.args.get('page', 1, type=int)
+    pagination = (AuditLog.query
+                  .order_by(AuditLog.id.desc())
+                  .paginate(page=page, per_page=50, error_out=False))
+    return render_template('admin/audit.html',
+        pagination=pagination, entries=pagination.items,
+        format_datetime=format_datetime)
 
 
 @admin_bp.route('/users')
@@ -323,6 +404,7 @@ def user_new():
         )
         if form.password.data:
             user.set_password(form.password.data)
+        _audit('user.create', user.username, 'admin' if user.is_admin else 'regular user')
         db.session.add(user)
         db.session.commit()
         flash(f'User {user.username} created.', 'success')
@@ -343,12 +425,15 @@ def user_edit(id):
         if form.email.data != user.email and User.query.filter_by(email=form.email.data).first():
             flash('Email already exists.', 'danger')
             return render_template('admin/user_form.html', form=form, title='Edit User', user=user)
+        old_username = user.username
         user.username = form.username.data
         user.email = form.email.data
         user.is_admin = form.is_admin.data
         user.is_active = form.is_active.data if 'is_active' in request.form else False
         if form.password.data:
             user.set_password(form.password.data)
+        detail = f'renamed from {old_username}' if old_username != user.username else ''
+        _audit('user.update', user.username, detail)
         db.session.commit()
         flash(f'User {user.username} updated.', 'success')
         return redirect(url_for('admin.users'))
@@ -373,6 +458,7 @@ def user_delete(id):
         return redirect(url_for('admin.users'))
     username = user.username
     db.session.delete(user)
+    _audit('user.delete', username)
     db.session.commit()
     flash(f'User {username} deleted.', 'success')
     return redirect(url_for('admin.users'))

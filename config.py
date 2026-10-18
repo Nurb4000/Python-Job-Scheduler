@@ -11,6 +11,17 @@ WEAK_SECRET_KEYS = {
     'change-this-to-a-random-secret-key',
 }
 
+# Passwords refused when seeding the first admin account.
+WEAK_ADMIN_PASSWORDS = {
+    '',
+    'admin123',
+    'password',
+    'changeme',
+    'change-me',
+    'change-this',
+    'letmein',
+}
+
 
 class Config:
     SECRET_KEY = os.getenv('SECRET_KEY', '')
